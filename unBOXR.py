@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import sys, traceback
+from collections import OrderedDict
 import warnings
 import math
 import numpy as np
@@ -78,8 +79,9 @@ def getFormat(nV,nC):
 def getLines(myFile, numLines):
 	lines = ''
 	for i in range(0,numLines):
-		lines += myFile.readline().strip()
-	return lines
+		lines += (myFile.readline().strip() + ' ')
+
+	return lines.strip()
 
 def getNumLines(nVal, valFmt):
 	numLines = math.floor(nVal / valFmt[0])
@@ -106,6 +108,7 @@ def getFullMatrix(nRow, nCol, xvals, iCons):
 	# Load data from xvals into C(I,J) as directed by ICON
 	for ic in range(0,nCon):
 		if(iCons[ic] == 0):
+			#print(iCons)
 			raise(ValueError("Invalid control value at index + {:d}"\
 				.format(ic)))
 		nLoad = abs(iCons[ic])
@@ -208,7 +211,6 @@ def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 	
 		parsed = parse.parse(nVal*valFmt[1],lines)
 
-		#print(parsed)
 		if(parsed == None):
 			print('nVF = {0:d}, valFmt = {1:}'.format(nVf, nVal*valFmt[1]))
 			raise(ValueError)
@@ -222,15 +224,14 @@ def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 	if(nCon > 0):
 		numLines = getNumLines(nCon, conFmt)
 		lines = getLines(tapeFile, numLines)
-	
-		parsed = parse.parse(nCon*conFmt[1],lines)	
-
-		#print(parsed)
+		#parsed = parse.parse(nCon*conFmt[1],lines)	
+		parsed = lines.split()
+		
 		if(parsed == None):
 			print('nCf = {0:d}, conFmt = {1:}'.format(nCf, conFmt))
 			raise(ValueError)	
 		for item in parsed:
-			iCons.append(item)
+			iCons.append(int(item))
 
 	tapeFile.close()
 	return ((nRowH, nColH), xVals, iCons)
@@ -247,6 +248,8 @@ firstRxn = True
 maxRxns = max(len(rxnDict[key]) for key in rxnDict)
 numMat = len(rxnDict.keys())
 totRxns = sum(len(rxnDict[key]) for key in rxnDict)
+
+rxnDict = OrderedDict(sorted(rxnDict.items()))
 
 for key in rxnDict.keys():
 	if(firstRxn):
@@ -282,7 +285,7 @@ for key in rxnDict.keys():
 			exit()
 		if(dims == -1):
 			continue
-	
+		
 		covArray = getFullMatrix(dims[0], dims[1], xVals, iCons)
 	
 	
