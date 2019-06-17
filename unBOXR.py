@@ -5,7 +5,59 @@ import math
 import numpy as np
 import parse
 
- 
+# Get list of requested reactions and return a dictionary
+def getReactionList(inputName):
+
+	inputFile = open(inputName,'r')
+	inpFmt  = 3*'{:d}' + '{:}'
+
+	rxnDict = {}
+	for rxn in inputFile:
+		iType = 0
+		mat1 = 0
+		mt1 = 0
+		parsed = parse.parse(inpFmt,rxn)
+	
+		if(parsed != None):
+			iType,mat,mt,rest = parsed
+		else:
+			parsed = rxn.split()
+			if(parsed != None and len(parsed) >= 2):
+				iType = int(parsed[0])
+				mat = int(parsed[1])
+			else:
+				print("Can't parse reaction: {0:}".format(rxn))
+				continue
+	
+		# mat1 & mt1 are optional; see if they're present
+			tail = parse.search(2*'{:d}',rest)
+			if( tail != None):
+				# Assume the first two are mat1 & mt1; ignore anything else
+				mat1, mt1 = rest.split()[:2]
+				mat1 = int(mat1)
+				mt1 = int(mt1)
+			else:
+				mat1 = mt1 = 0	
+		
+			if(iType == 0 and mat == 0): 
+				print("Found terminator; quitting")
+				exit()
+	
+		# Create a dictionary of materials requested, grouping multiple 
+		# reactions into one common material
+		if(iType == 3 or iType == 4): 
+			mt1 = mt
+			mat1 = mat
+	
+		thisRxn =  {'MT': mt, 'iType': iType, 'MAT1': mat1, 'MT1': mt1 }
+		if(mat not in rxnDict):
+			rxnDict[mat] = [thisRxn]
+		else:
+			rxnDict[mat].append(thisRxn)
+
+	inputFile.close()
+	return rxnDict
+
 # Lookup function for format specifiers for covariance matrix
 def getFormat(nV,nC):
 	# Convert from Fortran -> C-based indexing
@@ -88,7 +140,7 @@ def getFullMatrix(nRow, nCol, xvals, iCons):
 	
 	return(cArray)
 
-def getBoxerData(fName, iType, mat, mt):
+def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 	headFmt = '{:1d}{:12}{:.21}' + 2*'{:5d}{:4d}' + 2*'{:4d}{:3d}' + 3*'{:4d}'
 	tapeFile = open(fName, "r")
 	tapeFile.seek(0,0) # reset position each time we open it
@@ -99,10 +151,8 @@ def getBoxerData(fName, iType, mat, mt):
 	for record in tapeFile:
 		iTypeH = matH = 0
 		parsed = parse.parse(headFmt,record)
-		#print("R=",record)
+
 		if(parsed != None):
-			#print(parsed, record)
-			# Retrieve header record
 			iTypeH,shortID,title,matH,mtH,mat1H,mt1H,nVal,nVf, \
 				nCon, nCf, nRowM, nRowH, nColH = parsed
 			if(iType == -1):
@@ -112,7 +162,6 @@ def getBoxerData(fName, iType, mat, mt):
 				# Do printout of BOXER format data and continue to next record
 			elif(iTypeH == 9):
 				# End of file?
-				#print("Found iType == 9; exiting...")
 				message = ("Reaction iType = {0:d} / mat = {1:d}" + \
 					   " / MT = {2:d} not found! Continuing...") \
 					  .format(iType, mat, mt)
@@ -142,10 +191,9 @@ def getBoxerData(fName, iType, mat, mt):
 
 	# TODO: Figure out how to re-loop back into the parser where we stopped for iType == -1?
 	if(iType > 0 and not (iTypeH == iType and matH == mat and mtH == mt)):
-		print(iType, iTypeH, mat, matH, mt, mtH)
 
 		err = "Requested data not found: " + \
-			"iType = {0:d}  mat = {1:d}  MT = {2:d};  mat1 = {3:}  MT1 = {4:} " \
+			"\n\tiType = {0:d}\n\tmat = {1:d}  MT = {2:d};\n\tmat1 = {3:d}  MT1 = {4:d}" \
 			.format(iType, mat, mt, mat1, mt1)
 		#print(err)
 		raise(RuntimeError(err))
@@ -187,96 +235,73 @@ def getBoxerData(fName, iType, mat, mt):
 	tapeFile.close()
 	return ((nRowH, nColH), xVals, iCons)
 
-inputName = './fetchCov.dat'
-tapeName = "./tape81"
 
-inputFile = open(inputName,'r')
+tapeName = "./tape81"
+inputName = './fetchCov.dat'
+
+rxnDict = getReactionList(inputName)
 covFile = open("newCov.dat", 'w')
 
-#headFmt = '{:2d}{:12}{:.21}' + 11*'{:4d}'
-inpFmt  = 3*'{:d}' + '{:}'
-
 firstRxn = True
-for rxn in inputFile:
-	iType = 0
-	parsed = parse.parse(inpFmt,rxn)
 
-	if(parsed != None):
-		iType,mat,mt,rest = parsed
-	else:
-		parsed = rxn.split()
-		if(parsed != None and len(parsed) >= 2):
-			iType = int(parsed[0])
-			mat = int(parsed[1])
-		else:
-			print("Can't parse reaction: {0:}".format(rxn))
-			continue
+maxRxns = max(len(rxnDict[key]) for key in rxnDict)
+numMat = len(rxnDict.keys())
+totRxns = sum(len(rxnDict[key]) for key in rxnDict)
 
-	# Grab up energy bounds for first reaction & output to master file
+for key in rxnDict.keys():
 	if(firstRxn):
 		try:
-			dims, xVals, iCons = getBoxerData(tapeName, 0, mat, 0)	
+			dims, xVals, iCons = getBoxerData(tapeName, 0, key, 0)	
 		except Exception as ex:
-			print("Problem getting energy bounds for material:\t{0:}".format(mat))
+			print("Problem getting energy bounds for material:\t{0:}".format(key))
 			exit()
 
 		firstRxn = False
-		#xVals = np.array(xVals)
-
+		xVals = np.array(xVals)
+	
 		covFile.write('\t{0:d}\tES12.5\n'.format(len(xVals)))
-
-		
+	
+			
 		bounds = ''.join('{' + '{:d}:11.4e'.format(i) + '} ' for i in range(0,len(xVals)))
 		covFile.write(bounds.format(*xVals))
-		covFile.write('\n')
-		#bounds = ''.join('{' + '{:d}:11.4e'.format(i) + '} ' for i in range(0,6))
-		#for row in zip(*[iter(xVals)]*6):
-		#	print(bounds.format(*row))
-		#	covFile.write(bounds.format(*row) + "\n")	
-		# Handle the last row (which may have < 6 elements)
-		#lastBounds = len(xVals) % 6 
-		#bounds = ''.join('{' + '{:d}:12.5e'.format(i) + '} ' for i in range(0,lastBounds))
-		#covFile.write(bounds.format(*xVals[-lastBounds:]))
+		covFile.write('\n\t{0:d}\t{1:d}\t{2:d}\n'.format(numMat,totRxns,maxRxns))
+		
+	covFile.write('\t{0:d}\n'.format(len(rxnDict[key])))
 
-	# mat1 & mt1 are optional; see if they're present
-	tail = parse.search(2*'{:d}',rest)
-	if( tail != None):
-		# Assume the first two are mat1 & mt1; ignore anything else
-		mat1, mt1 = rest.split()[:2]
-		mat1 = int(mat1)
-		mt1 = int(mt1)
-	else:
-		mat1 = mt1 = 0	
+	for rxn in rxnDict[key]:	
+		# Grab up energy bounds for first reaction & output to master file
+		print("Fetching MAT = {0:d} & MT = {1:d} with iType = {2:d}".format(key, rxn['MT'],rxn['iType']))
+			
+		dims = []
+		try:
+			dims, xVals, iCons = \
+				getBoxerData(tapeName, rxn['iType'], key, rxn['MT'], rxn['MAT1'],rxn['MT1'])
+		except Exception as ex:
+			print("Error parsing reaction list:\n\t{0:}".format(ex))
+			#traceback.print_exc(file=sys.stdout)
+			exit()
+		if(dims == -1):
+			continue
+	
+		covArray = getFullMatrix(dims[0], dims[1], xVals, iCons)
+	
+	
+		covFile.write('\t{0:d}\t{1:d}\t{2:d}\n'.format(key,rxn['MT'],rxn['iType']))
+		outStr = ''
+		for row in covArray:
+			for val in row:
+				outStr += '{:11.4e} '.format(val) 
+			outStr += '\n'
 
-	if(iType == 0 and mat == 0): 
-		print("Found terminator; quitting")
-		exit()
-	dims = []
-	try:
-		dims, xVals, iCons = getBoxerData(tapeName, iType, mat, mt)
-	except Exception as ex:
-		print("Error parsing reaction list:\n\t{0:}".format(ex))
-		#traceback.print_exc(file=sys.stdout)
-		exit()
-	if(dims == -1):
-		continue
-
-	covArray = getFullMatrix(dims[0], dims[1], xVals, iCons)
-
-
-	covFile.write(rxn)
-	outStr = ''
-	for row in covArray:
-		for val in row:
-			outStr += '{:11.4e} '.format(val) 
-		outStr += '\n'
-	#print("cov array = ", outStr)
-	covFile.write(outStr)
+		covFile.write(outStr)
 
 covFile.close()		
 
-#900 IF (ITYPE.NE.-1) WRITE (NOUT,901) ITYPE,MAT,MT,MAT1,MT1
-#901 FORMAT (/50H ***ERROR IN BOXR***CANNOT FIND ITYPE,MAT,MT,MAT1,
-#1 ,5HMT1 =,5I5)
-#IF (ITYPE.EQ.-1) WRITE(NTAB,190) IZERO,IZERO
-#STOP
+#bounds = ''.join('{' + '{:d}:11.4e'.format(i) + '} ' for i in range(0,6))
+	#for row in zip(*[iter(xVals)]*6):
+	#	print(bounds.format(*row))
+	#	covFile.write(bounds.format(*row) + "\n")	
+	# Handle the last row (which may have < 6 elements)
+	#lastBounds = len(xVals) % 6 
+	#bounds = ''.join('{' + '{:d}:12.5e'.format(i) + '} ' for i in range(0,lastBounds))
+	#covFile.write(bounds.format(*xVals[-lastBounds:]))
