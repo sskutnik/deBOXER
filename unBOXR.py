@@ -6,6 +6,12 @@ import math
 import numpy as np
 import parse
 
+def getLinesToSkip(nVf, nCf, nVal, nCon):
+	valFmt, conFmt = getFormat(nVf,nCf)	
+	skipLines = math.ceil(nVal / valFmt[0]) + \
+		math.ceil(nCon / conFmt[0])
+	return skipLines
+
 # Get list of requested reactions and return a dictionary
 def getReactionList(inputName):
 
@@ -93,7 +99,7 @@ def getFullMatrix(nRow, nCol, xvals, iCons):
 	i = 0
 	j = -1
 	iStart = 1
-	iV = -1
+	iV = 0
 	nSym = 0
 	
 	if(nCol == 0): 
@@ -112,10 +118,11 @@ def getFullMatrix(nRow, nCol, xvals, iCons):
 			raise(ValueError("Invalid control value at index + {:d}"\
 				.format(ic)))
 		nLoad = abs(iCons[ic])
-		iV += 1
-		#print(iV,nVal,ic,nCon)
+
 		assert(iV < nVal)
 		cLoad = xVals[iV]
+		iV += 1
+
 
 		for n in range(0, nLoad):
 			j += 1
@@ -155,42 +162,50 @@ def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 		iTypeH = matH = 0
 		parsed = parse.parse(headFmt,record)
 
-		if(parsed != None):
-			iTypeH,shortID,title,matH,mtH,mat1H,mt1H,nVal,nVf, \
-				nCon, nCf, nRowM, nRowH, nColH = parsed
-			if(iType == -1):
-				if(matH == 0): matH = 1
-				print(5*'{:6d}'.format(iTypeH, matH,mtH,mat1H, mt1H))
-				break
-				# Do printout of BOXER format data and continue to next record
-			elif(iTypeH == 9):
-				# End of file?
-				message = ("Reaction iType = {0:d} / mat = {1:d}" + \
-					   " / MT = {2:d} not found! Continuing...") \
-					  .format(iType, mat, mt)
-				warnings.warn(message)
-				tapeFile.close()
-				return (-1, None, None)
-
-		else:
+		if(not parsed):
 			# Keep looking until we find a new header
+			print("Parse failed: ", record)
 			continue
+
+		iTypeH,shortID,title,matH,mtH,mat1H,mt1H,nVal,nVf, \
+			nCon, nCf, nRowM, nRowH, nColH = parsed
+		#print(record)
+
+		if(iType == -1):
+			if(matH == 0): matH = 1
+			print(5*'{:6d}'.format(iTypeH, matH,mtH,mat1H, mt1H))
+			break
+			# Do printout of BOXER format data and continue to next record
+		elif(iTypeH == 9):
+			# End of file?
+			message = ("Reaction iType = {0:d} / mat = {1:d}" + \
+				   " / MT = {2:d} not found! Continuing...") \
+				  .format(iType, mat, mt)
+			warnings.warn(message)
+			tapeFile.close()
+			return (-1, None, None)
+
+
 		if(iTypeH == iType):
 			# For group boundaries only, ignore MAT / MAT1  &  MT / MT1
 			if(iType == 0):
 				break
 			if(matH == mat and mtH == mt):
 				# Ignore mat1 & MT1 for iType = 1 or 2
-				if(iType == 1 or iType == 2): break
+				if(iType == 1 or iType == 2): 
+					break
 				elif(iType == 3 or iType == 4):
 					# Full match required for iType = 3 or 4
 					if((mat1H == mat1) and (mt1H == mt1)): 
 						break
-			continue
 		else:
 			iTypeH = matH = mtH = -1
 			Ci = Cj = 0
 
+		# Skip to the next header record
+		toSkip = getLinesToSkip(nVf, nCf, nVal, nCon)
+		for i in range(0,toSkip): next(tapeFile)
+		continue
 
 	# TODO: Figure out how to re-loop back into the parser where we stopped for iType == -1?
 	if(iType > 0 and not (iTypeH == iType and matH == mat and mtH == mt)):
