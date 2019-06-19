@@ -6,10 +6,10 @@ import math
 import numpy as np
 import parse
 
-def getLinesToSkip(nVf, nCf, nVal, nCon):
-	valFmt, conFmt = getFormat(nVf,nCf)	
-	skipLines = math.ceil(nVal / valFmt[0]) + \
-		math.ceil(nCon / conFmt[0])
+def getLinesToSkip(fmt, nVC):
+	valFmt, conFmt = getFormat(fmt)
+	skipLines = math.ceil(nVC[0] / valFmt[0]) + \
+		math.ceil(nVC[1] / conFmt[0])
 	return skipLines
 
 # Get list of requested reactions and return a dictionary
@@ -66,10 +66,11 @@ def getReactionList(inputName):
 	return rxnDict
 
 # Lookup function for format specifiers for covariance matrix
-def getFormat(nV,nC):
+def getFormat(fmt):
+	nV, nC = fmt
 	# Convert from Fortran -> C-based indexing
-	nV = nV-1
-	nC = nC-1
+	nV -= 1
+	nC -= 1
 
 	if(nV < 6 or nV > 13):
 		raise(ValueError("Invalid value for nV; 6 < nV < 15; got {:d}".format(nV)))
@@ -94,22 +95,27 @@ def getNumLines(nVal, valFmt):
 	if(nVal % valFmt[0] > 0): numLines += 1			
 	return numLines
 
-def getFullMatrix(nRow, nCol, xvals, iCons):
+#def getFullMatrix(nRow, nCol, xvals, iCons):
+def getFullMatrix(tapeFile, iType, mat, mt, mat1=0, mt1=0, iStart = 0, cArray=None):
+
+	dims, fmt, nVC, nRowM = getBoxerHeader(tapeFile, iType, mat, mt, mat1, mt1)
+	xVals, iCons = getBoxerData(tapeFile, fmt, nVC)	
+
 	nx = 0
 	i = 0
 	j = -1
-	iStart = 1
 	iV = 0
 	nSym = 0
-	
+		
+	nVal = nVC[0]
+	nCon = nVC[1]
+	nRow, nCol = dims
+
 	if(nCol == 0): 
 		nSym = 1
 		nCol = nRow
-	
-	nCon = len(iCons)
-	nVal = len(xVals)
 
-	cArray = np.zeros((nRow,nCol))
+	if(cArray is None): cArray = np.zeros((nRow,nCol))
 
 	# Load data from xvals into C(I,J) as directed by ICON
 	for ic in range(0,nCon):
@@ -117,17 +123,18 @@ def getFullMatrix(nRow, nCol, xvals, iCons):
 			#print(iCons)
 			raise(ValueError("Invalid control value at index + {:d}"\
 				.format(ic)))
+
+
 		nLoad = abs(iCons[ic])
 
-		assert(iV < nVal)
-		cLoad = xVals[iV]
-		iV += 1
-
+		if(iCons[ic] < 0): 
+			iV += 1
+			assert(iV < nVal)
+			cLoad = xVals[iV]
 
 		for n in range(0, nLoad):
 			j += 1
 			if(nx % nVal == 0): 
-				iStart += 1
 				iV = 0
 
 			if(j == nCol):
@@ -139,29 +146,30 @@ def getFullMatrix(nRow, nCol, xvals, iCons):
 			if(iCons[ic] > 0):
 				cLoad = 0
 				if(i > iStart): cLoad = cArray[i-1][j]
+
 			cArray[i][j] = cLoad
 			nx += 1
 
 			if(nSym == 0 or i == j): continue
 			
-			#print(i,j,iV)
 			cArray[j][i] = cLoad
-			nx +=1
-	
-	return(cArray)
+			nx += 1
 
-def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
+	if(nRowM > 0):
+		# Get next page of data
+		iStart += 1	
+		return getFullMatrix(tapeFile, iType, mat, mt, mat1, mt1, iStart, cArray)
+	else:
+		return cArray	
+
+
+def getBoxerHeader(tapeFile, iType, mat, mt, mat1=0, mt1=0):
 	headFmt = '{:1d}{:12}{:.21}' + 2*'{:5d}{:4d}' + 2*'{:4d}{:3d}' + 3*'{:4d}'
-	tapeFile = open(fName, "r")
-	tapeFile.seek(0,0) # reset position each time we open it
-	xVals = []
-	iCons = []
 
 	# Locate the requested reaction
 	for record in tapeFile:
 		iTypeH = matH = 0
 		parsed = parse.parse(headFmt,record)
-
 		if(not parsed):
 			# Keep looking until we find a new header
 			print("Parse failed: ", record)
@@ -169,7 +177,6 @@ def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 
 		iTypeH,shortID,title,matH,mtH,mat1H,mt1H,nVal,nVf, \
 			nCon, nCf, nRowM, nRowH, nColH = parsed
-		#print(record)
 
 		if(iType == -1):
 			if(matH == 0): matH = 1
@@ -201,9 +208,9 @@ def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 		else:
 			iTypeH = matH = mtH = -1
 			Ci = Cj = 0
-
 		# Skip to the next header record
-		toSkip = getLinesToSkip(nVf, nCf, nVal, nCon)
+		toSkip = getLinesToSkip((nVf, nCf), (nVal, nCon))
+
 		for i in range(0,toSkip): next(tapeFile)
 		continue
 
@@ -216,18 +223,24 @@ def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 		#print(err)
 		raise(RuntimeError(err))
 		return
+	return ((nRowH, nColH), (nVf, nCf), (nVal, nCon), nRowM)
 
-	valFmt, conFmt = getFormat(nVf, nCf)
+
+def getBoxerData(tapeFile, fmt, nVC):
+	nVal, nCon = nVC
+
+	xVals = []
+	iCons = []
+	valFmt, conFmt = getFormat(fmt) # fmt = (nVf, nCf)
 
 	# Read in Boxer-formatted data for Cov matrix
 	if(nVal > 0):
 		numLines = getNumLines(nVal, valFmt)
 		lines = getLines(tapeFile, numLines)
-	
 		parsed = parse.parse(nVal*valFmt[1],lines)
-
-		if(parsed == None):
-			print('nVF = {0:d}, valFmt = {1:}'.format(nVf, nVal*valFmt[1]))
+		#print(parsed)
+		if(parsed is None):
+			print('nVF = {0:d}, valFmt = {1:}'.format(fmt[0], nVal*valFmt[1]))
 			raise(ValueError)
 			return
 		for item in parsed:
@@ -243,13 +256,12 @@ def getBoxerData(fName, iType, mat, mt, mat1=0, mt1=0):
 		parsed = lines.split()
 		
 		if(parsed == None):
-			print('nCf = {0:d}, conFmt = {1:}'.format(nCf, conFmt))
+			print('nCf = {0:d}, conFmt = {1:}'.format(fmt[1], conFmt))
 			raise(ValueError)	
 		for item in parsed:
 			iCons.append(int(item))
 
-	tapeFile.close()
-	return ((nRowH, nColH), xVals, iCons)
+	return (xVals, iCons)
 
 
 tapeName = "./tape81"
@@ -265,11 +277,15 @@ numMat = len(rxnDict.keys())
 totRxns = sum(len(rxnDict[key]) for key in rxnDict)
 
 rxnDict = OrderedDict(sorted(rxnDict.items()))
+tapeFile = open(tapeName, "r")
 
 for key in rxnDict.keys():
+
 	if(firstRxn):
 		try:
-			dims, xVals, iCons = getBoxerData(tapeName, 0, key, 0)	
+			dims, fmt, nVC, nRowM = getBoxerHeader(tapeFile, 0, key, 0)	
+			xVals, iCons = getBoxerData(tapeFile, fmt, nVC)	
+
 		except Exception as ex:
 			print("Problem getting energy bounds for material:\t{0:}".format(key))
 			exit()
@@ -283,26 +299,24 @@ for key in rxnDict.keys():
 		bounds = ''.join('{' + '{:d}:11.4e'.format(i) + '} ' for i in range(0,len(xVals)))
 		covFile.write(bounds.format(*xVals))
 		covFile.write('\n\t{0:d}\t{1:d}\t{2:d}\n'.format(numMat,totRxns,maxRxns))
-		
+
 	covFile.write('\t{0:d}\n'.format(len(rxnDict[key])))
 
 	for rxn in rxnDict[key]:	
 		# Grab up energy bounds for first reaction & output to master file
-		print("Fetching MAT = {0:d} & MT = {1:d} with iType = {2:d}".format(key, rxn['MT'],rxn['iType']))
-			
-		dims = []
-		try:
-			dims, xVals, iCons = \
-				getBoxerData(tapeName, rxn['iType'], key, rxn['MT'], rxn['MAT1'],rxn['MT1'])
-		except Exception as ex:
-			print("Error parsing reaction list:\n\t{0:}".format(ex))
-			#traceback.print_exc(file=sys.stdout)
-			exit()
-		if(dims == -1):
-			continue
+		print("Fetching MAT = {0:d} & MT = {1:d} with iType = {2:d}".format(key, rxn['MT'],rxn['iType']))			
+		tapeFile.seek(0,0) # reset position each time we open it
 		
-		covArray = getFullMatrix(dims[0], dims[1], xVals, iCons)
-	
+		covArray = None
+		#try:
+		covArray = getFullMatrix(tapeFile, rxn['iType'], key, rxn['MT'], rxn['MAT1'],rxn['MT1'], 0, covArray)
+		#except Exception as ex:
+		#	print("Error parsing reaction list:\n\t{0:}".format(ex))
+			#traceback.print_exc(file=sys.stdout)
+		#	exit()
+		#if(dims == -1):
+		#	continue
+		assert(covArray is not None)
 	
 		covFile.write('\t{0:d}\t{1:d}\t{2:d}\n'.format(key,rxn['MT'],rxn['iType']))
 		outStr = ''
@@ -313,6 +327,7 @@ for key in rxnDict.keys():
 
 		covFile.write(outStr)
 
+tapeFile.close()
 covFile.close()		
 
 #bounds = ''.join('{' + '{:d}:11.4e'.format(i) + '} ' for i in range(0,6))
