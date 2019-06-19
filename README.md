@@ -11,6 +11,5 @@ where `matNum1` and `MT1` are the ENDF/B-formatted material number and reaction 
 
 ### TODO ###
 
- - Add in grouping information by MAT (i.e., # reactions per material ID before each set of covariance matrices)
  - Add in translation from MAT & MT to symbolic representations (e.g., `2225 103 -> Ti-46(n,p)Sc-46`)
  - Develop validation tests against known covariance data
